@@ -13,7 +13,8 @@ use Symfony\Component\Console\Input\InputOption;
  * One-off cleanup: converts base64 images (<img src="data:image/...;base64,...">) in existing HTML fields into an
  * Image in Files and an [image] shortcode. New writes are already handled by Base64ImageExtension.
  *
- * - Every HTML field of every DataObject class, in the base table, _Live and _Versions.
+ * - Every HTML field that processes shortcodes, of every DataObject class, in the base table, _Live and _Versions
+ *   (and the Fluent _Localised tables).
  * - Direct SQL updates (SQLUpdate): no new versions are created and pages don't show up as "Modified" in the CMS.
  * - Thanks to the FileHash deduplication all versions point to the same file: the version history stays intact,
  *   without the blobs.

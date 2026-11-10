@@ -3,17 +3,19 @@
 namespace Hamaka\Base64Images\Extension;
 
 use Hamaka\Base64Images\Base64ImageConverter;
-use SilverStripe\Core\Config\Configurable;
+use SilverStripe\Control\Director;
 use SilverStripe\Core\Extension;
 use SilverStripe\ORM\DataObject;
+use SilverStripe\Security\Permission;
 
 /**
- * Converts base64 images in every HTML field (HTMLText/HTMLVarchar/HTMLFragment) into an Image in Files and an
+ * Converts base64 images in every HTML field that processes shortcodes (HTMLText) into an Image in Files and an
  * [image] shortcode on write. See Base64ImageConverter.
  *
  * Applied to DataObject, so it covers pages, elemental blocks and any other object with an HTML field.
  *
- * Disable it per project with:
+ * Only when the current user may: see Base64ImageConverter.write_permission. Leave out classes or fields with
+ * Base64ImageConverter.exclude_classes and exclude_fields, or disable it for the whole project with:
  *   SilverStripe\ORM\DataObject:
  *     extensions:
  *       base64Images: null
@@ -22,59 +24,60 @@ use SilverStripe\ORM\DataObject;
  */
 class Base64ImageExtension extends Extension
 {
-    use Configurable;
-
-    /** Per class, onBeforeWrite runs often */
-    protected static array $htmlFieldCache = [];
-
     protected function onBeforeWrite(): void
     {
         $owner = $this->getOwner();
         $converter = null;
+        $changed = false;
 
-        foreach ($this->getHtmlFieldNames() as $field) {
+        foreach (Base64ImageConverter::convertibleFields(get_class($owner)) as $field) {
             $value = $owner->getField($field);
             if (!is_string($value) || !Base64ImageConverter::containsDataImage($value)) {
                 continue;
             }
 
-            $converter ??= Base64ImageConverter::create();
+            if ($converter === null) {
+                // Only checked once there is something to convert
+                if (!$this->canConvertOnWrite()) {
+                    return;
+                }
+                // One mail for the whole record, below
+                $converter = Base64ImageConverter::create()->setNotify(false);
+            }
+
             $newValue = $converter->convert($value, sprintf('%s #%d %s', get_class($owner), $owner->ID, $field));
 
             if ($newValue !== $value) {
                 $owner->setField($field, $newValue);
+                $changed = true;
             }
+        }
+
+        if ($converter === null) {
+            return;
+        }
+
+        Base64ImageConverter::notify($converter->getErrors());
+
+        // FileLinkTracking (the "Used on" tab in Files) also runs on write. When it ran before this extension it
+        // has not seen the new shortcodes, so run it again.
+        if ($changed && $owner->hasMethod('syncLinkTracking')) {
+            $owner->syncLinkTracking();
         }
     }
 
     /**
-     * All HTML fields of the owner's class, including those of its parent classes
+     * The conversion creates and publishes files, so by default only CMS users trigger it. Writes from the command
+     * line (imports, tasks) are always converted.
      */
-    protected function getHtmlFieldNames(): array
+    protected function canConvertOnWrite(): bool
     {
-        $class = get_class($this->getOwner());
+        $permission = Base64ImageConverter::config()->get('write_permission');
 
-        if (!isset(static::$htmlFieldCache[$class])) {
-            static::$htmlFieldCache[$class] = static::filterHtmlFields(DataObject::getSchema()->databaseFields($class));
+        if (!$permission || Director::is_cli()) {
+            return true;
         }
 
-        return static::$htmlFieldCache[$class];
-    }
-
-    /**
-     * @param array $fieldSpecs [field => spec], as returned by DataObjectSchema::databaseFields()
-     * @return string[] names of the HTML fields
-     */
-    public static function filterHtmlFields(array $fieldSpecs): array
-    {
-        $fields = [];
-        foreach ($fieldSpecs as $field => $spec) {
-            // HTMLText, HTMLVarchar(255), HTMLFragment, DBHTMLText or the fully qualified class name
-            if (preg_match('/^(?:[\w\\\\]*\\\\)?(?:DB)?HTML(?:Text|Varchar|Fragment)\b/', (string) $spec)) {
-                $fields[] = $field;
-            }
-        }
-
-        return $fields;
+        return (bool) Permission::check($permission);
     }
 }

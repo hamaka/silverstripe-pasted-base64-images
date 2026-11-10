@@ -3,7 +3,6 @@
 namespace Hamaka\Base64Images\Tests;
 
 use Hamaka\Base64Images\Base64ImageConverter;
-use Hamaka\Base64Images\Extension\Base64ImageExtension;
 use Hamaka\Base64Images\Tests\Base64ImageConverterTest\TestObject;
 use PHPUnit\Framework\Attributes\DataProvider;
 use SilverStripe\Assets\Dev\TestAssetStore;
@@ -120,13 +119,76 @@ class Base64ImageConverterTest extends SapphireTest
         $this->assertSame(0, Image::get()->count());
     }
 
-    public function testUnsupportedDataUriIsIgnored(): void
+    public function testUnsupportedDataUriIsSkipped(): void
     {
-        $input = '<img src="data:image/svg+xml;base64,' . base64_encode('<svg/>') . '"><img src="/a.png" alt="data:image/png">';
+        $input = '<img src="data:image/svg+xml;base64,' . base64_encode('<svg/>') . '"><img src="/a.png" alt="data:image/png">'
+            . '<div style="background:url(data:image/png;base64,' . $this->pngBase64() . ')"></div>';
         $converter = Base64ImageConverter::create();
 
         $this->assertSame($input, $converter->convert($input));
         $this->assertSame(0, $converter->getStats()['failed']);
+        $this->assertSame(3, $converter->getStats()['skipped']);
+        $this->assertSame('Unsupported data URI (data:image/svg+xml;base64)', $converter->getSkipped()[0]['reason']);
+        $this->assertSame(0, Image::get()->count());
+    }
+
+    public function testDataUriWithParameterIsConverted(): void
+    {
+        $html = Base64ImageConverter::create()->convert('<img src="data:image/png;charset=utf-8;base64,' . $this->pngBase64() . '">');
+
+        $this->assertStringStartsWith('[image ', $html);
+    }
+
+    public function testAngleBracketInAttributeDoesNotBecomeMarkup(): void
+    {
+        $converter = Base64ImageConverter::create();
+        $html = $converter->convert('<p>' . $this->imgTag($this->pngBase64(), 'alt="><img src=x onerror=alert(1)>"') . '</p>');
+
+        $this->assertSame(1, $converter->getStats()['converted']);
+        $this->assertStringNotContainsString('<img', $html);
+        $this->assertStringContainsString('alt="&gt;&lt;img src=x onerror=alert(1)&gt;"', $html);
+        $this->assertStringEndsWith(']</p>', $html);
+    }
+
+    public function testLimits(): void
+    {
+        $tag = $this->imgTag($this->pngBase64());
+
+        Base64ImageConverter::config()->set('max_pixels', 100);
+        $converter = Base64ImageConverter::create();
+        $this->assertSame($tag, $converter->convert($tag));
+        $this->assertStringContainsString('max_pixels', $converter->getErrors()[0]['message']);
+
+        Base64ImageConverter::config()->set('max_pixels', 0)->set('max_bytes', 50);
+        $converter = Base64ImageConverter::create();
+        $this->assertSame($tag, $converter->convert($tag));
+        $this->assertStringContainsString('max_bytes', $converter->getErrors()[0]['message']);
+
+        Base64ImageConverter::config()->set('max_bytes', 0)->set('max_images', 1);
+        $converter = Base64ImageConverter::create();
+        $html = $converter->convert($tag . $tag . $tag);
+        $this->assertStringStartsWith('[image ', $html);
+        $this->assertStringEndsWith($tag . $tag, $html);
+        $this->assertSame(1, $converter->getStats()['converted']);
+        $this->assertSame(1, $converter->getStats()['failed']);
+        $this->assertSame(1, $converter->getStats()['skipped']);
+    }
+
+    public function testSameImageElsewhereInFilesIsNotReused(): void
+    {
+        $base64 = $this->pngBase64();
+
+        // An editor's own upload of the same image, deliberately left in draft
+        $other = Image::create();
+        $other->setFromString(base64_decode($base64), 'Uploads/editors-own.png');
+        $other->write();
+
+        $converter = Base64ImageConverter::create();
+        $converter->convert($this->imgTag($base64));
+
+        $this->assertSame(1, $converter->getStats()['created']);
+        $this->assertSame(2, Image::get()->filter('FileHash', sha1(base64_decode($base64)))->count());
+        $this->assertFalse(Image::get()->byID($other->ID)->isPublished());
     }
 
     public function testDryRunWritesNothing(): void
@@ -148,18 +210,34 @@ class Base64ImageConverterTest extends SapphireTest
         $this->assertSame(1, Image::get()->count());
     }
 
-    public function testFilterHtmlFields(): void
+    public function testOnlyFieldsThatProcessShortcodesAreConverted(): void
     {
-        $this->assertSame(
-            ['A', 'B', 'C', 'D'],
-            Base64ImageExtension::filterHtmlFields([
-                'A' => 'HTMLText',
-                'B' => 'HTMLVarchar(255)',
-                'C' => 'HTMLFragment',
-                'D' => 'SilverStripe\ORM\FieldType\DBHTMLText',
-                'E' => 'Varchar',
-                'F' => 'Text',
-            ])
-        );
+        $this->assertSame(['Content'], Base64ImageConverter::convertibleFields(TestObject::class));
+
+        $tag = $this->imgTag($this->pngBase64());
+        $object = TestObject::create(['Fragment' => $tag, 'Short' => '<img src="data:image/png;base64,AAAA">']);
+        $object->write();
+
+        // Not compared as a whole: core's link tracking normalises the HTML on write
+        $this->assertStringContainsString('src="data:image/png;base64,', $object->Fragment);
+        $this->assertStringNotContainsString('[image', $object->Fragment);
+        $this->assertSame(0, Image::get()->count());
+    }
+
+    public function testExcludedClassesAndFields(): void
+    {
+        Base64ImageConverter::config()->set('exclude_fields', [TestObject::class . '.Content']);
+        $this->assertSame([], Base64ImageConverter::convertibleFields(TestObject::class));
+
+        Base64ImageConverter::config()->set('exclude_fields', [])->set('exclude_classes', [TestObject::class]);
+        $this->assertSame([], Base64ImageConverter::convertibleFields(TestObject::class));
+
+        $tag = $this->imgTag($this->pngBase64());
+        $object = TestObject::create(['Content' => $tag]);
+        $object->write();
+
+        $this->assertStringContainsString('src="data:image/png;base64,', $object->Content);
+        $this->assertStringNotContainsString('[image', $object->Content);
+        $this->assertSame(0, Image::get()->count());
     }
 }

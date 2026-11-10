@@ -1,8 +1,8 @@
 {
-    "name": "hamaka/silverstripe-base64-images",
+    "name": "hamaka/silverstripe-pasted-base64-images",
     "description": "Converts images pasted or dropped into the HTML editor (TinyMCE paste_data_images, stored as base64 data URIs) into regular files in the asset admin with an [image] shortcode, on save and for existing content including version history.",
     "type": "silverstripe-vendormodule",
-    "homepage": "https://github.com/hamaka/silverstripe-base64-images",
+    "homepage": "https://github.com/hamaka/silverstripe-pasted-base64-images",
     "keywords": [
         "silverstripe",
         "tinymce",
@@ -24,8 +24,8 @@
         }
     ],
     "support": {
-        "issues": "https://github.com/hamaka/silverstripe-base64-images/issues",
-        "source": "https://github.com/hamaka/silverstripe-base64-images"
+        "issues": "https://github.com/hamaka/silverstripe-pasted-base64-images/issues",
+        "source": "https://github.com/hamaka/silverstripe-pasted-base64-images"
     },
     "require": {
         "silverstripe/framework": "^6",
