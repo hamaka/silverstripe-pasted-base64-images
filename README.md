@@ -54,6 +54,7 @@ Hamaka\Base64Images\Base64ImageConverter:
   filename_prefix: 'pasted-'               # followed by the first 12 characters of the sha1
   image_title: 'Pasted image'
   default_class: 'leftAlone ss-htmleditorfield-file image'  # used when the <img> has no class
+  generate_thumbnails: true                # thumbnails for the file list in the CMS
 
   write_permission: 'CMS_ACCESS'           # who triggers the conversion on write; false: everyone
   max_bytes: 20971520                      # largest image that is converted (20 MB); 0: no limit

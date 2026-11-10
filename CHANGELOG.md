@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.0.2 - 2026-11-10
+
+- Converted images get the thumbnails that the file list in the CMS shows; they showed up as empty tiles. Turn it
+  off with `generate_thumbnails: false`. Files that were converted before this release keep their empty tile until
+  their thumbnails are generated.
+
 ## 2.0.1 - 2026-11-10
 
 - Shorter README.
