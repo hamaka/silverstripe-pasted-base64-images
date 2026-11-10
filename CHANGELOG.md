@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.3 - 2026-11-10
+
+- The task generates the missing thumbnails of files that were converted before 1.0.2. Run it once
+  with `apply=1` after updating; it also does this when there is nothing left to convert.
+
 ## 1.0.2 - 2026-11-10
 
 - Converted images get the thumbnails that the file list in the CMS shows; they showed up as empty tiles. Turn it

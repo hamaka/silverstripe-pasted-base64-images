@@ -99,6 +99,7 @@ vendor/bin/sake dev/tasks/ConvertBase64ImagesTask apply=1 optimize=0   # without
 - It writes with direct SQL: no new versions are created, and pages don't show up as "Modified".
 - Old versions point to the same file, so the History tab keeps showing the image.
 - It runs `OPTIMIZE TABLE` on the changed tables, because InnoDB doesn't release the freed space otherwise.
+- It generates the thumbnails for the file list in the CMS for converted files that don't have them yet.
 - It is safe to run again.
 
 The output of an apply run, shortened:
