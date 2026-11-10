@@ -36,7 +36,7 @@ class Base64ImageTaskRunner
         if ($apply) {
             $this->write('MODE: APPLY', 'changed');
         } else {
-            $this->write('MODE: DRY RUN - nothing is changed (apply=1 to convert, verbose=1 for every record)', 'notice');
+            $this->write('MODE: DRY RUN - nothing is changed, run with "apply" to convert (see the task description)', 'notice');
         }
 
         $converter = Base64ImageConverter::create()

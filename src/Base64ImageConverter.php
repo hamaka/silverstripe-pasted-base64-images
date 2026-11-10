@@ -480,7 +480,8 @@ class Base64ImageConverter
             Email::create()
                 ->setTo($to)
                 ->setSubject('Pasted image not converted on ' . static::siteLabel())
-                ->setBody($body)
+                // text(), not setBody(): sendPlain() strips tags from an HTML body, and the snippets are HTML
+                ->text($body)
                 ->sendPlain();
 
             if ($cache && $throttle > 0) {
