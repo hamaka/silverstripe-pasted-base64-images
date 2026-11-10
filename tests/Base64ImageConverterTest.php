@@ -5,6 +5,7 @@ namespace Hamaka\Base64Images\Tests;
 use Hamaka\Base64Images\Base64ImageConverter;
 use Hamaka\Base64Images\Extension\Base64ImageExtension;
 use Hamaka\Base64Images\Tests\Base64ImageConverterTest\TestObject;
+use PHPUnit\Framework\Attributes\DataProvider;
 use SilverStripe\Assets\Dev\TestAssetStore;
 use SilverStripe\Assets\Image;
 use SilverStripe\Dev\SapphireTest;
@@ -107,9 +108,7 @@ class Base64ImageConverterTest extends SapphireTest
         ];
     }
 
-    /**
-     * @dataProvider provideInvalidData
-     */
+    #[DataProvider('provideInvalidData')]
     public function testInvalidDataIsLeftUntouched(string $base64, string $expectedError): void
     {
         $input = '<p>' . $this->imgTag($base64) . '</p>';

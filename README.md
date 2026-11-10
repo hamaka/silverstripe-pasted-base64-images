@@ -40,7 +40,7 @@ Pasting should keep working for editors, so this module leaves `paste_data_image
 
 ## Requirements
 
-- Silverstripe 5.3+. This is the `5` branch; use the `6` branch (`^6`) for Silverstripe 6.
+- Silverstripe 6. This is the `6` branch; use the `5` branch (`^5`) for Silverstripe 5.3+.
 
 ## Installation
 
@@ -48,7 +48,7 @@ Pasting should keep working for editors, so this module leaves `paste_data_image
 composer require hamaka/silverstripe-base64-images
 ```
 
-Then flush: `?flush=1` in the browser, or `vendor/bin/sake dev/build flush=1`. The module adds no tables.
+Then flush: `?flush=1` in the browser, or `vendor/bin/sake flush`. The module adds no tables.
 
 ## Configuration
 
@@ -81,16 +81,20 @@ SilverStripe\ORM\DataObject:
 - Old versions point to the same deduplicated file, so the History tab keeps showing the image.
 - Afterwards it runs `OPTIMIZE TABLE` on the changed tables. InnoDB doesn't release the freed space otherwise.
 - It reports the table sizes before and after.
-- It runs as a dry run unless `apply=1` is passed.
+- It runs as a dry run unless `--apply` is passed.
+- It exits with a non-zero code when an image could not be converted.
 
 **Make a database backup first.**
 
 ```sh
-vendor/bin/sake dev/tasks/ConvertBase64ImagesTask                      # dry run: count and report
-vendor/bin/sake dev/tasks/ConvertBase64ImagesTask verbose=1            # dry run, per record
-vendor/bin/sake dev/tasks/ConvertBase64ImagesTask apply=1              # convert + OPTIMIZE TABLE
-vendor/bin/sake dev/tasks/ConvertBase64ImagesTask apply=1 optimize=0   # without OPTIMIZE TABLE
+vendor/bin/sake tasks:ConvertBase64ImagesTask                          # dry run: count and report
+vendor/bin/sake tasks:ConvertBase64ImagesTask --details                # dry run, per record
+vendor/bin/sake tasks:ConvertBase64ImagesTask --apply                  # convert + OPTIMIZE TABLE
+vendor/bin/sake tasks:ConvertBase64ImagesTask --apply --no-optimize    # without OPTIMIZE TABLE
 ```
+
+The old form `vendor/bin/sake dev/tasks/ConvertBase64ImagesTask --apply` keeps working. In the browser, use
+`/dev/tasks/ConvertBase64ImagesTask?apply=1`.
 
 To find affected content beforehand, and to check afterwards that it returns 0 rows:
 

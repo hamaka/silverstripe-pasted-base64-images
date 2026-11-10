@@ -3,7 +3,11 @@
 namespace Hamaka\Base64Images\Task;
 
 use SilverStripe\Dev\BuildTask;
-use SilverStripe\ORM\DB;
+use SilverStripe\PolyExecution\PolyOutput;
+use Symfony\Component\Console\Command\Command;
+use Symfony\Component\Console\Formatter\OutputFormatter;
+use Symfony\Component\Console\Input\InputInterface;
+use Symfony\Component\Console\Input\InputOption;
 
 /**
  * One-off cleanup: converts base64 images (<img src="data:image/...;base64,...">) in existing HTML fields into an
@@ -16,32 +20,56 @@ use SilverStripe\ORM\DB;
  * - Runs OPTIMIZE TABLE on the changed tables afterwards; InnoDB doesn't release the freed space otherwise.
  * - On an error the original tag is left untouched; one summary is mailed at the end.
  *
- * Make a database backup first. Dry run unless apply=1:
- *   vendor/bin/sake dev/tasks/ConvertBase64ImagesTask                       (dry run: count and report)
- *   vendor/bin/sake dev/tasks/ConvertBase64ImagesTask verbose=1             (dry run, per record)
- *   vendor/bin/sake dev/tasks/ConvertBase64ImagesTask apply=1               (convert + OPTIMIZE TABLE)
- *   vendor/bin/sake dev/tasks/ConvertBase64ImagesTask apply=1 optimize=0    (without OPTIMIZE TABLE)
+ * Make a database backup first. Dry run unless --apply:
+ *   vendor/bin/sake tasks:ConvertBase64ImagesTask                          (dry run: count and report)
+ *   vendor/bin/sake tasks:ConvertBase64ImagesTask --details                (dry run, per record)
+ *   vendor/bin/sake tasks:ConvertBase64ImagesTask --apply                  (convert + OPTIMIZE TABLE)
+ *   vendor/bin/sake tasks:ConvertBase64ImagesTask --apply --no-optimize    (without OPTIMIZE TABLE)
+ * In the browser: /dev/tasks/ConvertBase64ImagesTask?apply=1
  */
 class ConvertBase64ImagesTask extends BuildTask
 {
-    private static string $segment = 'ConvertBase64ImagesTask';
+    protected static string $commandName = 'ConvertBase64ImagesTask';
 
-    protected $title = 'Convert base64 images in HTML into files';
+    protected string $title = 'Convert base64 images in HTML into files';
 
-    protected $description = 'Converts <img src="data:image/..."> in all HTML fields (including _Live and _Versions) into an Image + [image] shortcode, then runs OPTIMIZE TABLE. Dry run unless apply=1. Make a database backup first.';
+    protected static string $description = 'Converts <img src="data:image/..."> in all HTML fields (including _Live and _Versions) into an Image + [image] shortcode, then runs OPTIMIZE TABLE. Dry run unless --apply. Make a database backup first.';
 
-    public function run($request): void
+    private const FORMATS = [
+        'created' => 'info',
+        'changed' => 'info',
+        'notice'  => 'comment',
+        'error'   => 'error',
+    ];
+
+    protected function execute(InputInterface $input, PolyOutput $output): int
     {
         @set_time_limit(0);
         @ini_set('memory_limit', '1024M');
 
-        $apply = (bool) $request->getVar('apply');
-        $verbose = (bool) $request->getVar('verbose');
-        $optimize = $request->getVar('optimize') === null || (bool) $request->getVar('optimize');
+        $runner = Base64ImageTaskRunner::create(function (string $message, string $type = '') use ($output) {
+            $message = OutputFormatter::escape($message);
+            $format = self::FORMATS[$type] ?? null;
+            $output->writeln($format ? "<$format>$message</>" : $message);
+        });
 
-        $runner = Base64ImageTaskRunner::create(
-            fn(string $message, string $type = '') => DB::alteration_message($message, $type)
+        $success = $runner->run(
+            (bool) $input->getOption('apply'),
+            (bool) $input->getOption('details'),
+            (bool) $input->getOption('optimize')
         );
-        $runner->run($apply, $verbose, $optimize);
+
+        // Images that couldn't be converted are left untouched, but a cron job or CI should still see it
+        return $success ? Command::SUCCESS : Command::FAILURE;
+    }
+
+    public function getOptions(): array
+    {
+        return [
+            new InputOption('apply', null, InputOption::VALUE_NONE, 'Actually convert; without it this is a dry run that only counts and reports'),
+            // Not "verbose": -v/--verbose is a reserved Symfony console option
+            new InputOption('details', null, InputOption::VALUE_NONE, 'Report every record'),
+            new InputOption('optimize', null, InputOption::VALUE_NEGATABLE, 'Run OPTIMIZE TABLE on the changed tables <comment>[default: true]</comment>', true),
+        ];
     }
 }
