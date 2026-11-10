@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.1 - 2026-11-10
+
+- Shorter README. No changes to the code.
+
 ## 1.0.0 - 2026-11-10
 
 Initial release, for Silverstripe 5.
