@@ -164,6 +164,21 @@ class Base64ImageTaskRunner
         $this->report($tableStats, $converter, $apply);
         $this->reportSkipped($converter->getSkipped(), $verbose);
 
+        // Also when there was nothing to convert: files from an earlier run may still be without thumbnails
+        $withoutThumbnails = $converter->generateMissingThumbnails();
+        if ($withoutThumbnails) {
+            $this->write('--- Thumbnails ---');
+            $this->write(
+                sprintf(
+                    '%d file(s) in %s without thumbnails for the file list in the CMS, %s',
+                    $withoutThumbnails,
+                    Base64ImageConverter::config()->get('folder'),
+                    $apply ? 'generated' : 'to generate'
+                ),
+                'changed'
+            );
+        }
+
         $errors = $converter->getErrors();
         if ($errors) {
             $this->write('--- Errors (tag left untouched) ---', 'error');

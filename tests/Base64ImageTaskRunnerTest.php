@@ -7,6 +7,8 @@ use Hamaka\Base64Images\Task\Base64ImageTaskRunner;
 use Hamaka\Base64Images\Tests\Base64ImageTaskRunnerTest\VersionedObject;
 use Hamaka\Base64Images\Tests\Base64ImageTaskRunnerTest\VersionedSubObject;
 use Hamaka\Base64Images\Tests\Base64ImageTaskRunnerTest\VersionedSubSubObject;
+use SilverStripe\AssetAdmin\Controller\AssetAdmin;
+use SilverStripe\AssetAdmin\Forms\UploadField;
 use SilverStripe\Assets\Dev\TestAssetStore;
 use SilverStripe\Assets\Image;
 use SilverStripe\Dev\SapphireTest;
@@ -146,6 +148,42 @@ class Base64ImageTaskRunnerTest extends SapphireTest
         $this->assertTrue($this->runTask(true), implode("
 ", $this->output));
         $this->assertContains('No base64 images found.', $this->output);
+    }
+
+    public function testMissingThumbnailsOfEarlierRunsAreGenerated(): void
+    {
+        if (!class_exists(AssetAdmin::class)) {
+            $this->markTestSkipped('silverstripe/asset-admin is not installed');
+        }
+
+        // A file as an earlier version of the module left it: converted, but without thumbnails
+        $image = imagecreatetruecolor(800, 600);
+        ob_start();
+        imagepng($image);
+        $base64 = base64_encode(ob_get_clean());
+        Base64ImageConverter::config()->set('generate_thumbnails', false);
+        Base64ImageConverter::create()->convert('<img src="data:image/png;base64,' . $base64 . '">');
+        Base64ImageConverter::config()->set('generate_thumbnails', true);
+
+        $file = Image::get()->filter('FileHash', sha1(base64_decode($base64)))->first();
+        $method = AssetAdmin::singleton()->getThumbnailGenerator()->config()->get('method');
+        $width = UploadField::config()->uninherited('thumbnail_width');
+        $height = UploadField::config()->uninherited('thumbnail_height');
+        $this->assertNull($file->existingOnly()->$method($width, $height));
+
+        $this->assertTrue($this->runTask(false));
+        $this->assertContains('1 file(s) in Uploads/pasted-images without thumbnails for the file list in the CMS, to generate', $this->output);
+        $this->assertNull($file->existingOnly()->$method($width, $height), 'A dry run generates nothing');
+
+        $this->output = [];
+        $this->assertTrue($this->runTask(true));
+        $this->assertContains('1 file(s) in Uploads/pasted-images without thumbnails for the file list in the CMS, generated', $this->output);
+        $this->assertNotNull($file->existingOnly()->$method($width, $height));
+
+        // Nothing left to do
+        $this->output = [];
+        $this->assertTrue($this->runTask(true));
+        $this->assertNotContains('--- Thumbnails ---', $this->output);
     }
 
     public function testSkippedAndErrorsAreReported(): void

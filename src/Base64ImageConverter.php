@@ -6,6 +6,8 @@ use InvalidArgumentException;
 use Psr\Log\LoggerInterface;
 use Psr\SimpleCache\CacheInterface;
 use SilverStripe\AssetAdmin\Controller\AssetAdmin;
+use SilverStripe\AssetAdmin\Forms\UploadField;
+use SilverStripe\Assets\File;
 use SilverStripe\Assets\Folder;
 use SilverStripe\Assets\Image;
 use SilverStripe\Control\Email\Email;
@@ -714,6 +716,63 @@ class Base64ImageConverter
         } catch (Throwable $e) {
             static::logger()->warning(sprintf('Could not generate thumbnails for %s: %s', $file->getFilename(), $e->getMessage()));
         }
+    }
+
+    /**
+     * Generates the thumbnails for the file list in the CMS for the files in the module's folder that don't have
+     * them: files that were converted before thumbnails were generated, or with generate_thumbnails off at the time.
+     * In a dry run they are only counted.
+     *
+     * @return int|null the number of files without thumbnails, null when there is nothing to check (the setting is
+     *                  off, silverstripe/asset-admin is not installed, or the folder does not exist)
+     */
+    public function generateMissingThumbnails(): ?int
+    {
+        if (!$this->setting('generate_thumbnails') || !class_exists(AssetAdmin::class)) {
+            return null;
+        }
+
+        return Versioned::withVersionedMode(function () {
+            Versioned::set_stage(Versioned::DRAFT);
+
+            $folder = File::find($this->setting('folder'));
+            if (!$folder instanceof Folder) {
+                return null;
+            }
+
+            // The same two sizes AssetAdmin::generateThumbnails() makes
+            $method = AssetAdmin::singleton()->getThumbnailGenerator()->config()->get('method');
+            $sizes = [
+                [UploadField::config()->uninherited('thumbnail_width'), UploadField::config()->uninherited('thumbnail_height')],
+                [AssetAdmin::config()->get('thumbnail_width'), AssetAdmin::config()->get('thumbnail_height')],
+            ];
+
+            $missing = 0;
+            foreach (Image::get()->filter('ParentID', $folder->ID) as $file) {
+                try {
+                    $complete = true;
+                    foreach ($sizes as [$width, $height]) {
+                        // Null when the thumbnail does not exist; an image that is already small enough is its own
+                        if (!$file->existingOnly()->$method($width, $height)) {
+                            $complete = false;
+                            break;
+                        }
+                    }
+                    if ($complete) {
+                        continue;
+                    }
+
+                    $missing++;
+                    if (!$this->dryRun) {
+                        $this->generateThumbnails($file);
+                    }
+                } catch (Throwable $e) {
+                    static::logger()->warning(sprintf('Could not check the thumbnails of %s: %s', $file->getFilename(), $e->getMessage()));
+                }
+            }
+
+            return $missing;
+        });
     }
 
     /**

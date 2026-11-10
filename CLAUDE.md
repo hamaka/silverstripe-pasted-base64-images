@@ -38,6 +38,7 @@ Tags: `1.0.0` on `1`, `2.0.0` on `2`. Bump the CHANGELOG with every release, and
   - It dedupes on `FileHash` (sha1) within the configured folder only, with an in-memory cache per instance.
   - After creating a file it calls `AssetAdmin::generateThumbnails()` (when asset-admin is installed): the file
     list in the CMS only shows thumbnails that already exist, and those are normally made on upload.
+    `generateMissingThumbnails()` does the same for files in the folder that don't have them; the task calls it.
   - It builds the shortcode, encoding `"`, `<` and `>` in attribute values.
   - On any error it leaves the original tag in place and logs it. `convert()` mails the errors of one call in one
     mail. Mail goes through `Email` with `->text()`: `setBody()` + `sendPlain()` would strip the `<img>` snippets.
