@@ -5,6 +5,7 @@ namespace Hamaka\Base64Images;
 use InvalidArgumentException;
 use Psr\Log\LoggerInterface;
 use Psr\SimpleCache\CacheInterface;
+use SilverStripe\AssetAdmin\Controller\AssetAdmin;
 use SilverStripe\Assets\Folder;
 use SilverStripe\Assets\Image;
 use SilverStripe\Control\Email\Email;
@@ -51,6 +52,12 @@ class Base64ImageConverter
 
     /** Used when the <img> has no class (the same classes the CMS editor uses when inserting an image) */
     private static string $default_class = 'leftAlone ss-htmleditorfield-file image';
+
+    /**
+     * Generate the thumbnails that the file list in the CMS shows. That list only shows thumbnails that already
+     * exist; they are normally made when a file is uploaded. Needs silverstripe/asset-admin.
+     */
+    private static bool $generate_thumbnails = true;
 
     /**
      * Permission code(s) of which the current user needs at least one for the conversion on write. 'CMS_ACCESS'
@@ -681,6 +688,7 @@ class Base64ImageConverter
 
             $file->write();
             $file->publishSingle();
+            $this->generateThumbnails($file);
             $this->stats['created']++;
 
             return $file;
@@ -689,6 +697,23 @@ class Base64ImageConverter
         $this->imageCache[$hash] = $file;
 
         return $file;
+    }
+
+    /**
+     * The file was not uploaded through the CMS, so the thumbnails for the file list have to be made here. Without
+     * them the list shows an empty tile. A failure only costs the thumbnail, never the conversion.
+     */
+    protected function generateThumbnails(Image $file): void
+    {
+        if (!$this->setting('generate_thumbnails') || !class_exists(AssetAdmin::class)) {
+            return;
+        }
+
+        try {
+            AssetAdmin::singleton()->generateThumbnails($file);
+        } catch (Throwable $e) {
+            static::logger()->warning(sprintf('Could not generate thumbnails for %s: %s', $file->getFilename(), $e->getMessage()));
+        }
     }
 
     /**

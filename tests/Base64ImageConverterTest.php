@@ -4,6 +4,8 @@ namespace Hamaka\Base64Images\Tests;
 
 use Hamaka\Base64Images\Base64ImageConverter;
 use Hamaka\Base64Images\Tests\Base64ImageConverterTest\TestObject;
+use SilverStripe\AssetAdmin\Controller\AssetAdmin;
+use SilverStripe\AssetAdmin\Forms\UploadField;
 use SilverStripe\Assets\Dev\TestAssetStore;
 use SilverStripe\Assets\Image;
 use SilverStripe\Dev\SapphireTest;
@@ -60,6 +62,29 @@ class Base64ImageConverterTest extends SapphireTest
         $this->assertStringStartsWith('Uploads/pasted-images/pasted-', $image->getFilename());
         $this->assertStringContainsString('id="' . $image->ID . '"', $html);
         $this->assertSame(1, $converter->getStats()['created']);
+    }
+
+    public function testThumbnailsForTheFileListAreGenerated(): void
+    {
+        if (!class_exists(AssetAdmin::class)) {
+            $this->markTestSkipped('silverstripe/asset-admin is not installed');
+        }
+
+        $method = AssetAdmin::singleton()->getThumbnailGenerator()->config()->get('method');
+        $width = UploadField::config()->uninherited('thumbnail_width');
+        $height = UploadField::config()->uninherited('thumbnail_height');
+
+        // Larger than the thumbnail, or no thumbnail is needed
+        $withThumbnail = $this->pngBase64(800, 600);
+        Base64ImageConverter::create()->convert($this->imgTag($withThumbnail));
+        $image = Image::get()->filter('FileHash', sha1(base64_decode($withThumbnail)))->first();
+        $this->assertNotNull($image->existingOnly()->$method($width, $height));
+
+        Base64ImageConverter::config()->set('generate_thumbnails', false);
+        $without = $this->pngBase64(800, 600, [10, 20, 30]);
+        Base64ImageConverter::create()->convert($this->imgTag($without));
+        $image = Image::get()->filter('FileHash', sha1(base64_decode($without)))->first();
+        $this->assertNull($image->existingOnly()->$method($width, $height));
     }
 
     public function testSameImageIsReused(): void
