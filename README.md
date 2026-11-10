@@ -40,13 +40,18 @@ Pasting should keep working for editors, so this module leaves `paste_data_image
 
 ## Requirements
 
-- Silverstripe 6. This is the `6` branch; use the `5` branch (`^5`) for Silverstripe 5.3+.
+| Silverstripe | Version | Branch |
+|---|---|---|
+| 5.3+ | `^1` | [`1`](https://github.com/hamaka/silverstripe-base64-images/tree/1) |
+| 6 | `^2` | [`2`](https://github.com/hamaka/silverstripe-base64-images/tree/2) (this branch) |
 
 ## Installation
 
 ```sh
 composer require hamaka/silverstripe-base64-images
 ```
+
+Composer picks the right version for your Silverstripe version.
 
 Then flush: `?flush=1` in the browser, or `vendor/bin/sake flush`. The module adds no tables.
 
