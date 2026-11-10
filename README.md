@@ -16,7 +16,7 @@ drops an image into the editor, it ends up in the HTML field as:
 That has two consequences:
 
 - **The database keeps growing.** Every save or publish copies the full image into `SiteTree_Versions`, and also
-  into `SiteTree` and `SiteTree_Live`. One site had 45 MB in 589 version records.
+  into `SiteTree` and `SiteTree_Live`.
 - **The image isn't in Files.** That means no management, no reuse, no resizing, and no caching as a separate file.
 
 Pasting should keep working for editors, so this module leaves `paste_data_images` on and fixes it on the server.
