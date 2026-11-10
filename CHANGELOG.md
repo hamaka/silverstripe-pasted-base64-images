@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.0.1 - 2026-11-10
+
+- Shorter README.
+- The tests require PHPUnit `^11.3`, like Silverstripe 6 itself. No changes to the code.
+
 ## 2.0.0 - 2026-11-10
 
 - Silverstripe 6 version of 1.0.0. `ConvertBase64ImagesTask` uses the Silverstripe 6 task API:
