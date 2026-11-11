@@ -4,9 +4,3 @@ Name: base64-images
 SilverStripe\ORM\DataObject:
   extensions:
     base64Images: Hamaka\Base64Images\Extension\Base64ImageExtension
-
-SilverStripe\Core\Injector\Injector:
-  Psr\SimpleCache\CacheInterface.Base64Images:
-    factory: SilverStripe\Core\Cache\CacheFactory
-    constructor:
-      namespace: 'Base64Images'

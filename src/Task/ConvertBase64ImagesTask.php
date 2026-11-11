@@ -19,7 +19,7 @@ use Symfony\Component\Console\Input\InputOption;
  * - Thanks to the FileHash deduplication all versions point to the same file: the version history stays intact,
  *   without the blobs.
  * - Runs OPTIMIZE TABLE on the changed tables afterwards; InnoDB doesn't release the freed space otherwise.
- * - On an error the original tag is left untouched; one summary is mailed at the end.
+ * - On an error the original tag is left untouched, listed at the end and logged.
  *
  * Make a database backup first. Dry run unless --apply:
  *   vendor/bin/sake tasks:ConvertBase64ImagesTask                          (dry run: count and report)

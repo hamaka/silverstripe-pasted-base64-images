@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.1.0 - unreleased
+
+- Errors are no longer mailed by the module. They are logged to the logger service
+  `Psr\Log\LoggerInterface.Base64Images`, which falls back to the default `Psr\Log\LoggerInterface`. Define that
+  service to mail them, or to send them anywhere else: see the README.
+- Removed: the settings `notify_email` and `notify_throttle_minutes`, `Base64ImageConverter::notify()` and
+  `setNotify()`, and the cache `Psr\SimpleCache\CacheInterface.Base64Images`.
+- A log entry has the context and a snippet of the tag in its log context.
+- `max_pixels` is 30 megapixels instead of 50. Generating the thumbnails loads the whole image into memory (about 4
+  bytes per pixel), so 50 megapixels could exceed a `memory_limit` of 256M.
+
 ## 2.0.3 - 2026-11-10
 
 - The task generates the missing thumbnails of files that were converted before 2.0.2. Run it once
