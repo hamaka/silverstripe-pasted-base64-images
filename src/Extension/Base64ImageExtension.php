@@ -41,8 +41,7 @@ class Base64ImageExtension extends Extension
                 if (!$this->canConvertOnWrite()) {
                     return;
                 }
-                // One mail for the whole record, below
-                $converter = Base64ImageConverter::create()->setNotify(false);
+                $converter = Base64ImageConverter::create();
             }
 
             $newValue = $converter->convert($value, sprintf('%s #%d %s', get_class($owner), $owner->ID, $field));
@@ -52,12 +51,6 @@ class Base64ImageExtension extends Extension
                 $changed = true;
             }
         }
-
-        if ($converter === null) {
-            return;
-        }
-
-        Base64ImageConverter::notify($converter->getErrors());
 
         // FileLinkTracking (the "Used on" tab in Files) also runs on write. When it ran before this extension it
         // has not seen the new shortcodes, so run it again.

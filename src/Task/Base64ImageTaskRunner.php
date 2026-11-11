@@ -57,9 +57,7 @@ class Base64ImageTaskRunner
             $this->write('MODE: DRY RUN - nothing is changed, run with "apply" to convert (see the task description)', 'notice');
         }
 
-        $converter = Base64ImageConverter::create()
-            ->setDryRun(!$apply)
-            ->setNotify(false); // one summary at the end
+        $converter = Base64ImageConverter::create()->setDryRun(!$apply);
 
         $targets = $this->getTargets();
         $sizesBefore = $this->getTableSizes(array_unique(array_column($targets, 'table')));
@@ -184,10 +182,6 @@ class Base64ImageTaskRunner
             $this->write('--- Errors (tag left untouched) ---', 'error');
             foreach ($errors as $error) {
                 $this->write($error['context'] . ': ' . $error['message'], 'error');
-            }
-            if ($apply) {
-                // Not throttled: the operator asked for this run
-                Base64ImageConverter::notify($errors, 'Sent by ConvertBase64ImagesTask.', false);
             }
         }
 

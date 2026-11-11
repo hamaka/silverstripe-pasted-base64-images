@@ -58,21 +58,17 @@ Hamaka\Base64Images\Base64ImageConverter:
 
   write_permission: 'CMS_ACCESS'           # who triggers the conversion on write; false: everyone
   max_bytes: 20971520                      # largest image that is converted (20 MB); 0: no limit
-  max_pixels: 50000000                     # largest width x height that is converted; 0: no limit
+  max_pixels: 30000000                     # largest width x height that is converted; 0: no limit
   max_images: 100                          # per field of one record; 0: no limit
 
   exclude_classes: []                      # classes that are never converted, with their subclasses
   exclude_fields: []                       # fields that are never converted, as 'Class.Field'
-
-  notify_email: null                       # null: Email.admin_email; false: no mail
-  notify_throttle_minutes: 60              # at most one mail per this many minutes; 0: no throttling
 ```
 
 - **`write_permission`:** the conversion creates and publishes files, so HTML submitted by visitors without CMS
   access is left as it is. Writes from the command line and the task are always converted.
 - **`exclude_classes` and `exclude_fields`:** for fields that are not rendered through the shortcode parser, such
   as a newsletter body or content served through an API. They apply on write and in the task.
-- **`notify_email`:** `Email.admin_email` is empty by default, so no mail is sent until you set one of the two.
 
 To disable the conversion on write altogether and only keep the task:
 
@@ -81,6 +77,37 @@ SilverStripe\ORM\DataObject:
   extensions:
     base64Images: null
 ```
+
+## Logging
+
+An image that could not be converted is logged as a warning, with the record and field in the message and a
+snippet of the tag in the log context. The module logs to the service `Psr\Log\LoggerInterface.Base64Images`.
+Unless you define it, that is the default `Psr\Log\LoggerInterface`, so the warnings end up wherever your other
+log messages go.
+
+```yaml
+SilverStripe\Core\Injector\Injector:
+  Psr\Log\LoggerInterface.Base64Images:
+    class: Monolog\Logger
+    constructor:
+      - 'base64-images'
+    calls:
+      - [pushHandler, ['%$Base64ImagesMailHandler']]
+  Base64ImagesMailHandler:
+    class: Monolog\Handler\BufferHandler
+    constructor:
+      - '%$Base64ImagesNativeMailHandler'
+  Base64ImagesNativeMailHandler:
+    class: Monolog\Handler\NativeMailerHandler
+    constructor:
+      - 'webmaster@example.com'          # to
+      - 'Pasted image not converted'     # subject
+      - 'noreply@example.com'            # from
+      - 'warning'                        # lowest level that is mailed
+```
+
+This logger replaces the default one for these messages. To also keep them in your regular log, push your
+existing handler onto it as well.
 
 ## Cleaning up existing content
 

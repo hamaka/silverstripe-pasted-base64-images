@@ -40,14 +40,14 @@ Tags: `1.0.0` on `1`, `2.0.0` on `2`. Bump the CHANGELOG with every release, and
     list in the CMS only shows thumbnails that already exist, and those are normally made on upload.
     `generateMissingThumbnails()` does the same for files in the folder that don't have them; the task calls it.
   - It builds the shortcode, encoding `"`, `<` and `>` in attribute values.
-  - On any error it leaves the original tag in place and logs it. `convert()` mails the errors of one call in one
-    mail. Mail goes through `Email` with `->text()`: `setBody()` + `sendPlain()` would strip the `<img>` snippets.
+  - On any error it leaves the original tag in place and logs a warning to `Psr\Log\LoggerInterface.Base64Images`,
+    with `context` and `snippet` in the log context. The Injector falls back to the default `LoggerInterface` when a
+    project does not define that service. The module sends no mail itself: a project that wants mail defines the
+    service with a mail handler (see README).
   - Data URIs it does not convert are counted as `skipped`, with a reason (`getSkipped()`); they are not errors.
-  - Throttling uses `Psr\SimpleCache\CacheInterface.Base64Images` with one fixed key, so varying the content does
-    not get around it.
 - `src/Extension/Base64ImageExtension.php`: `onBeforeWrite` on every `DataObject` (registered as `base64Images` in
   `_config/config.yml`, so projects can null it). It extends `SilverStripe\Core\Extension`, not `DataExtension`, which
-  works in 5.3+ and in 6. It checks `write_permission` (not on the command line), mails once per write, and calls
+  works in 5.3+ and in 6. It checks `write_permission` (not on the command line) and calls
   `syncLinkTracking()` again after a conversion, because `FileLinkTracking` may have run before it.
 - `src/Task/Base64ImageTaskRunner.php`: the task's work, version independent, with output through a callback
   `fn(string $message, string $type)`. It uses direct `SQLUpdate`s, so no new versions are created and nothing ends up
@@ -65,7 +65,7 @@ Tags: `1.0.0` on `1`, `2.0.0` on `2`. Bump the CHANGELOG with every release, and
 ## Tests
 
 The pure parsing logic (tag matching, limits, the PNG and JPEG walks) can be checked without a database by
-subclassing the converter, overriding `setting()` and running it in dry-run mode with `setNotify(false)`.
+subclassing the converter, overriding `setting()` and running it in dry-run mode.
 
 `tests/` contains SapphireTests that use `TestAssetStore`, so no real files are written. They need a Silverstripe
 project with PHPUnit and a database user that may create temporary databases:

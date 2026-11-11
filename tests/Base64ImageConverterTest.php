@@ -4,10 +4,15 @@ namespace Hamaka\Base64Images\Tests;
 
 use Hamaka\Base64Images\Base64ImageConverter;
 use Hamaka\Base64Images\Tests\Base64ImageConverterTest\TestObject;
+use Monolog\Handler\TestHandler;
+use Monolog\Level;
+use Monolog\Logger;
+use Psr\Log\LoggerInterface;
 use SilverStripe\AssetAdmin\Controller\AssetAdmin;
 use SilverStripe\AssetAdmin\Forms\UploadField;
 use SilverStripe\Assets\Dev\TestAssetStore;
 use SilverStripe\Assets\Image;
+use SilverStripe\Core\Injector\Injector;
 use SilverStripe\Dev\SapphireTest;
 
 class Base64ImageConverterTest extends SapphireTest
@@ -22,7 +27,6 @@ class Base64ImageConverterTest extends SapphireTest
     {
         parent::setUp();
         TestAssetStore::activate('Base64ImageConverterTest');
-        Base64ImageConverter::config()->set('notify_email', false);
     }
 
     protected function tearDown(): void
@@ -62,6 +66,35 @@ class Base64ImageConverterTest extends SapphireTest
         $this->assertStringStartsWith('Uploads/pasted-images/pasted-', $image->getFilename());
         $this->assertStringContainsString('id="' . $image->ID . '"', $html);
         $this->assertSame(1, $converter->getStats()['created']);
+    }
+
+    public function testLoggerFallsBackToTheDefaultLogger(): void
+    {
+        $this->assertSame(
+            Injector::inst()->get(LoggerInterface::class),
+            Injector::inst()->get(LoggerInterface::class . '.Base64Images')
+        );
+    }
+
+    public function testErrorsAreLoggedToTheOwnLogger(): void
+    {
+        $handler = new TestHandler();
+        Injector::inst()->registerService(new Logger('base64-images', [$handler]), LoggerInterface::class . '.Base64Images');
+
+        $tag = '<img src="data:image/png;base64,!!!!">';
+
+        // A dry run only counts
+        Base64ImageConverter::create()->setDryRun(true)->convert($tag, 'dry');
+        $this->assertFalse($handler->hasRecords(Level::Warning));
+
+        $html = Base64ImageConverter::create()->convert($tag, 'TestObject #1 Content');
+        $this->assertSame($tag, $html);
+
+        $records = $handler->getRecords();
+        $this->assertCount(1, $records);
+        $this->assertSame(Level::Warning, $records[0]->level);
+        $this->assertSame('Pasted image not converted (TestObject #1 Content): Invalid base64 data', $records[0]->message);
+        $this->assertSame(['context' => 'TestObject #1 Content', 'snippet' => $tag], $records[0]->context);
     }
 
     public function testThumbnailsForTheFileListAreGenerated(): void

@@ -4,13 +4,11 @@ namespace Hamaka\Base64Images;
 
 use InvalidArgumentException;
 use Psr\Log\LoggerInterface;
-use Psr\SimpleCache\CacheInterface;
 use SilverStripe\AssetAdmin\Controller\AssetAdmin;
 use SilverStripe\AssetAdmin\Forms\UploadField;
 use SilverStripe\Assets\File;
 use SilverStripe\Assets\Folder;
 use SilverStripe\Assets\Image;
-use SilverStripe\Control\Email\Email;
 use SilverStripe\Core\Config\Configurable;
 use SilverStripe\Core\Injector\Injectable;
 use SilverStripe\Core\Injector\Injector;
@@ -31,7 +29,8 @@ use Throwable;
  * - Deduplicated on FileHash (sha1) within the configured folder: pasting the same image again, or converting old
  *   versions, reuses one file.
  * - On any error (invalid or truncated data, an image over a limit, PCRE error, write failure) the original tag is
- *   left untouched, so no content is lost. The error is logged and (optionally) mailed.
+ *   left untouched, so no content is lost. The error is logged to Psr\Log\LoggerInterface.Base64Images, see
+ *   logger().
  * - Data URIs this class does not convert (svg, a CSS background, ...) are left untouched and counted as skipped.
  *
  * Usage:
@@ -72,7 +71,7 @@ class Base64ImageConverter
     private static int $max_bytes = 20971520;
 
     /** Largest image that is converted, in pixels (width x height). 0: no limit */
-    private static int $max_pixels = 50000000;
+    private static int $max_pixels = 30000000;
 
     /** At most this many images are converted per HTML value (one field of one record). 0: no limit */
     private static int $max_images = 100;
@@ -90,15 +89,6 @@ class Base64ImageConverter
      * @var string[]
      */
     private static array $exclude_fields = [];
-
-    /**
-     * Who to mail when an image could not be converted.
-     * null: Email.admin_email (empty by default, so no mail). false or '': no mail. Errors are always logged.
-     */
-    private static string|bool|null $notify_email = null;
-
-    /** Send at most one notification per this many minutes; errors in between are only logged. 0: no throttling */
-    private static int $notify_throttle_minutes = 60;
 
     /** Supported types: IMAGETYPE_* => extension */
     private const ALLOWED_TYPES = [
@@ -129,8 +119,6 @@ class Base64ImageConverter
 
     protected bool $dryRun = false;
 
-    protected bool $notify = true;
-
     protected array $stats = [
         'converted' => 0, // <img> tags converted (dry run: convertible)
         'created'   => 0, // new Image files
@@ -156,17 +144,6 @@ class Base64ImageConverter
     public function setDryRun(bool $dryRun): static
     {
         $this->dryRun = $dryRun;
-
-        return $this;
-    }
-
-    /**
-     * false: convert() doesn't mail its errors (e.g. a task that sends one summary at the end). Errors are always
-     * logged.
-     */
-    public function setNotify(bool $notify): static
-    {
-        $this->notify = $notify;
 
         return $this;
     }
@@ -280,7 +257,6 @@ class Base64ImageConverter
             return $html;
         }
 
-        $errorsBefore = count($this->errors);
         $this->imagesInValue = 0;
 
         $inTags = 0;   // data URIs inside the tags that were looked at
@@ -344,11 +320,6 @@ class Base64ImageConverter
             if ($outside > 0) {
                 $this->addSkipped($context, 'Data URI outside the src of a well-formed <img> tag', $outside);
             }
-        }
-
-        // One mail per HTML value, not one per image
-        if ($this->notify && !$this->dryRun) {
-            static::notify(array_slice($this->errors, $errorsBefore));
         }
 
         return $result;
@@ -863,91 +834,19 @@ class Base64ImageConverter
         ];
 
         if (!$this->dryRun) {
-            static::logger()->warning(sprintf('Pasted image not converted (%s): %s', $context ?: 'unknown', $message));
+            static::logger()->warning(
+                sprintf('Pasted image not converted (%s): %s', $context ?: 'unknown', $message),
+                ['context' => $context, 'snippet' => $snippet]
+            );
         }
     }
 
     /**
-     * Mails a summary of conversion errors to notify_email (or Email.admin_email).
-     * Never throws: a notification must not break a save.
-     *
-     * @param bool $throttle true: at most one mail per notify_throttle_minutes, whatever the errors are. The key
-     *                       does not depend on the errors, so varying the content does not get around it.
+     * Psr\Log\LoggerInterface.Base64Images. Unless a project defines that service, the Injector falls back to the
+     * default Psr\Log\LoggerInterface. Define it to send these messages somewhere of their own, e.g. a mail.
      */
-    public static function notify(array $errors, string $intro = '', bool $throttle = true): void
-    {
-        if (!$errors) {
-            return;
-        }
-
-        try {
-            $to = static::config()->get('notify_email');
-            if ($to === null) {
-                $to = Email::config()->get('admin_email');
-            }
-            if (!$to) {
-                return;
-            }
-
-            $minutes = $throttle ? (int) static::config()->get('notify_throttle_minutes') : 0;
-            $cache = $minutes > 0 ? static::cache() : null;
-            if ($cache && $cache->has('notify')) {
-                return;
-            }
-
-            $body = $intro !== '' ? $intro . "\n\n" : '';
-            $body .= 'One or more base64 images in HTML could not be converted into a file in Files. '
-                . 'The original <img> tag has been left in place, no content was lost.' . "\n\n";
-
-            foreach (array_slice($errors, 0, 50) as $error) {
-                $body .= '- ' . ($error['context'] ?: 'unknown') . ': ' . $error['message'] . "\n"
-                    . '  ' . $error['snippet'] . "\n\n";
-            }
-            if (count($errors) > 50) {
-                $body .= '... and ' . (count($errors) - 50) . " more errors\n";
-            }
-
-            if ($minutes > 0) {
-                $body .= "\nThis notification is sent at most once per $minutes minutes. "
-                    . "Errors in between are only written to the log.\n";
-            }
-
-            Email::create()
-                ->setTo($to)
-                ->setSubject('Pasted image not converted on ' . static::siteLabel())
-                // text(), not setBody(): sendPlain() strips tags from an HTML body, and the snippets are HTML
-                ->text($body)
-                ->sendPlain();
-
-            if ($cache) {
-                $cache->set('notify', true, $minutes * 60);
-            }
-        } catch (Throwable $e) {
-            static::logger()->error('Could not send pasted image notification: ' . $e->getMessage());
-        }
-    }
-
-    protected static function siteLabel(): string
-    {
-        $host = $_SERVER['HTTP_HOST'] ?? null;
-        if (!$host && class_exists(\SilverStripe\Control\Director::class)) {
-            $host = parse_url(\SilverStripe\Control\Director::absoluteBaseURL(), PHP_URL_HOST);
-        }
-
-        return $host ?: 'unknown site';
-    }
-
     protected static function logger(): LoggerInterface
     {
-        return Injector::inst()->get(LoggerInterface::class);
-    }
-
-    protected static function cache(): ?CacheInterface
-    {
-        try {
-            return Injector::inst()->get(CacheInterface::class . '.Base64Images');
-        } catch (Throwable $e) {
-            return null;
-        }
+        return Injector::inst()->get(LoggerInterface::class . '.Base64Images');
     }
 }

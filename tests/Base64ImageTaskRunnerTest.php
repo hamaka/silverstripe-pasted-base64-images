@@ -34,7 +34,6 @@ class Base64ImageTaskRunnerTest extends SapphireTest
     {
         parent::setUp();
         TestAssetStore::activate('Base64ImageTaskRunnerTest');
-        Base64ImageConverter::config()->set('notify_email', false);
         $this->output = [];
     }
 
