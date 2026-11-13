@@ -34,6 +34,12 @@ class Base64ImageTaskRunnerTest extends SapphireTest
     {
         parent::setUp();
         TestAssetStore::activate('Base64ImageTaskRunnerTest');
+
+        // The module's defaults, whatever the project that runs the tests configures
+        Base64ImageConverter::config()
+            ->set('folder', 'Uploads/pasted-images')
+            ->set('filename_prefix', 'pasted-')
+            ->set('max_dimension', 2500);
         $this->output = [];
     }
 
@@ -134,6 +140,7 @@ class Base64ImageTaskRunnerTest extends SapphireTest
         $this->assertAllConverted($values);
         $this->assertCount($rows, $values, 'No new versions');
         $this->assertSame(1, Image::get()->count(), 'One file for draft, live and the versions');
+        $this->assertTrue(Image::get()->first()->isPublished(), 'Published: the live content uses it');
 
         // The record is not "Modified": draft and live still have the same version
         $record = VersionedObject::get()->byID($record->ID);
@@ -147,6 +154,20 @@ class Base64ImageTaskRunnerTest extends SapphireTest
         $this->assertTrue($this->runTask(true), implode("
 ", $this->output));
         $this->assertContains('No base64 images found.', $this->output);
+    }
+
+    public function testImageOnlyInDraftStaysInDraft(): void
+    {
+        $record = VersionedObject::create(['Title' => 'x']);
+        $record->write();
+        $table = DataObject::getSchema()->tableForField(VersionedObject::class, 'Content');
+        DB::prepared_query(sprintf('UPDATE "%s" SET "Content" = ? WHERE "ID" = ?', $table), ['<p>' . $this->imgTag() . '</p>', $record->ID]);
+
+        $this->assertTrue($this->runTask(true), implode("\n", $this->output));
+
+        $image = Image::get()->first();
+        $this->assertFalse($image->isPublished(), 'Published along with the record');
+        $this->assertSame([$image->ID], VersionedObject::get()->byID($record->ID)->FileTracking()->column('ID'));
     }
 
     public function testMissingThumbnailsOfEarlierRunsAreGenerated(): void

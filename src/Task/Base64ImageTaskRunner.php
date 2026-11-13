@@ -79,6 +79,8 @@ class Base64ImageTaskRunner
                 continue;
             }
 
+            $converter->setPublish($target['publish']);
+
             // Before the work, so a large table doesn't look like a hang
             $this->write(sprintf('%s.%s: %d record(s) with data:image/ ...', $table, $field, count($ids)));
 
@@ -219,6 +221,8 @@ class Base64ImageTaskRunner
      *   - versions: true when a row is identified by RecordID + Version
      *   - touchTable: the base table to bump LastEdited in, null for history
      *   - isDraft: true for the draft table itself
+     *   - publish: whether the files are published: for live content, not for the draft or the history of a
+     *     versioned class with stages, whose files are published along with the record (see Base64ImageExtension)
      *   - excludedClasses: subclasses whose rows must be left alone (exclude_classes, exclude_fields)
      */
     public function getTargets(): array
@@ -241,6 +245,8 @@ class Base64ImageTaskRunner
 
             $table = $schema->tableName($class);
             $baseTable = $schema->baseDataTable($class);
+            $singleton = DataObject::singleton($class);
+            $staged = $singleton->hasExtension(Versioned::class) && $singleton->hasStages();
 
             foreach (self::SUFFIXES as $suffix => $info) {
                 if (!$dbSchema->hasTable($table . $suffix)) {
@@ -263,6 +269,7 @@ class Base64ImageTaskRunner
                         'versions'        => $info['versions'],
                         'touchTable'      => $info['versions'] ? null : $baseTable . $info['stage'],
                         'isDraft'         => $suffix === '',
+                        'publish'         => !$staged || $info['stage'] === '_Live',
                         'excludedClasses' => $this->excludedSubclasses($class, $field),
                     ];
                 }
@@ -404,6 +411,17 @@ class Base64ImageTaskRunner
                     $stats['created'],
                     Base64ImageConverter::config()->get('folder'),
                     $stats['reused']
+                ),
+                'created'
+            );
+        }
+        if ($stats['resized']) {
+            $this->write(
+                sprintf(
+                    '%d image(s) %s to at most %d px wide or high (max_dimension)',
+                    $stats['resized'],
+                    $apply ? 'scaled down' : 'to scale down',
+                    Base64ImageConverter::config()->get('max_dimension')
                 ),
                 'created'
             );
