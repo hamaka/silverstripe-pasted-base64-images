@@ -4,6 +4,7 @@ namespace Hamaka\Base64Images\Tests;
 
 use Hamaka\Base64Images\Base64ImageConverter;
 use Hamaka\Base64Images\Tests\Base64ImageConverterTest\TestObject;
+use Hamaka\Base64Images\Tests\Base64ImageTaskRunnerTest\VersionedObject;
 use Monolog\Handler\TestHandler;
 use Monolog\Level;
 use Monolog\Logger;
@@ -15,6 +16,7 @@ use SilverStripe\Assets\Dev\TestAssetStore;
 use SilverStripe\Assets\Image;
 use SilverStripe\Core\Injector\Injector;
 use SilverStripe\Dev\SapphireTest;
+use SilverStripe\Versioned\Versioned;
 
 class Base64ImageConverterTest extends SapphireTest
 {
@@ -22,12 +24,19 @@ class Base64ImageConverterTest extends SapphireTest
 
     protected static $extra_dataobjects = [
         TestObject::class,
+        VersionedObject::class,
     ];
 
     protected function setUp(): void
     {
         parent::setUp();
         TestAssetStore::activate('Base64ImageConverterTest');
+
+        // The module's defaults, whatever the project that runs the tests configures
+        Base64ImageConverter::config()
+            ->set('folder', 'Uploads/pasted-images')
+            ->set('filename_prefix', 'pasted-')
+            ->set('max_dimension', 2500);
     }
 
     protected function tearDown(): void
@@ -208,6 +217,86 @@ class Base64ImageConverterTest extends SapphireTest
         $this->assertStringEndsWith(']</p>', $html);
     }
 
+    public function testLargeImageIsScaledDown(): void
+    {
+        Base64ImageConverter::config()->set('max_dimension', 100);
+        $converter = Base64ImageConverter::create();
+
+        // The size in the tag is the pasted size: it must not make the shortcode upscale the smaller file
+        $html = $converter->convert($this->imgTag($this->pngBase64(300, 150), 'width="300" height="150"'));
+
+        $this->assertStringContainsString('width="100" height="50"', $html);
+        $image = Image::get()->first();
+        $this->assertSame([100, 50], [$image->getWidth(), $image->getHeight()]);
+        $this->assertSame(1, $converter->getStats()['resized']);
+
+        // A smaller size in the tag is kept
+        $html = Base64ImageConverter::create()->convert($this->imgTag($this->pngBase64(300, 150, [1, 2, 3]), 'width="60"'));
+        $this->assertStringContainsString('width="60" height="30"', $html);
+
+        // No limit: the original
+        Base64ImageConverter::config()->set('max_dimension', 0);
+        $converter = Base64ImageConverter::create();
+        $base64 = $this->pngBase64(300, 150, [4, 5, 6]);
+        $converter->convert($this->imgTag($base64));
+        $this->assertSame(0, $converter->getStats()['resized']);
+        $this->assertSame(1, Image::get()->filter('FileHash', sha1(base64_decode($base64)))->count());
+    }
+
+    public function testScaledImageIsReused(): void
+    {
+        Base64ImageConverter::config()->set('max_dimension', 100);
+        $tag = $this->imgTag($this->pngBase64(300, 150));
+
+        Base64ImageConverter::create()->convert($tag);
+        $converter = Base64ImageConverter::create();
+        $converter->convert($tag . $tag);
+
+        $this->assertSame(1, Image::get()->count());
+        $this->assertSame(0, $converter->getStats()['created']);
+        $this->assertSame(2, $converter->getStats()['reused']);
+
+        // A dry run counts each image once
+        $converter = Base64ImageConverter::create()->setDryRun(true);
+        $converter->convert($tag . $tag);
+        $this->assertSame(1, $converter->getStats()['resized']);
+    }
+
+    public function testGifIsNotScaled(): void
+    {
+        Base64ImageConverter::config()->set('max_dimension', 100);
+        $gd = imagecreatetruecolor(300, 150);
+        ob_start();
+        imagegif($gd);
+        $base64 = base64_encode(ob_get_clean());
+
+        $converter = Base64ImageConverter::create();
+        $html = $converter->convert('<img src="data:image/gif;base64,' . $base64 . '">');
+
+        $this->assertStringContainsString('width="300" height="150"', $html);
+        $this->assertSame(0, $converter->getStats()['resized']);
+    }
+
+    public function testRotatedJpegIsTurnedUprightWhenScaled(): void
+    {
+        Base64ImageConverter::config()->set('max_dimension', 100);
+
+        // 300 x 150 as stored, with EXIF orientation 6: displayed as 150 x 300
+        $gd = imagecreatetruecolor(300, 150);
+        ob_start();
+        imagejpeg($gd);
+        $jpeg = ob_get_clean();
+        $tiff = "II*\0" . pack('V', 8) . pack('v', 1) . pack('vvVvv', 0x0112, 3, 1, 6, 0) . pack('V', 0);
+        $app1 = "\xFF\xE1" . pack('n', 2 + 6 + strlen($tiff)) . "Exif\0\0" . $tiff;
+        $jpeg = substr($jpeg, 0, 2) . $app1 . substr($jpeg, 2);
+
+        $html = Base64ImageConverter::create()->convert('<img src="data:image/jpeg;base64,' . base64_encode($jpeg) . '">');
+
+        $this->assertStringContainsString('width="50" height="100"', $html);
+        $image = Image::get()->first();
+        $this->assertSame([50, 100], [$image->getWidth(), $image->getHeight()]);
+    }
+
     public function testLimits(): void
     {
         $tag = $this->imgTag($this->pngBase64());
@@ -266,6 +355,37 @@ class Base64ImageConverterTest extends SapphireTest
 
         $this->assertStringStartsWith('<p>[image ', $object->Content);
         $this->assertSame(1, Image::get()->count());
+    }
+
+    public function testOwnerThatIsNotVersionedPublishesTheFile(): void
+    {
+        TestObject::create(['Content' => $this->imgTag($this->pngBase64())])->write();
+
+        $this->assertTrue(Image::get()->first()->isPublished());
+    }
+
+    public function testVersionedOwnerPublishesTheFileItself(): void
+    {
+        $object = VersionedObject::create(['Content' => '<p>' . $this->imgTag($this->pngBase64()) . '</p>']);
+        $object->write();
+
+        $image = Image::get()->first();
+        $this->assertStringStartsWith('<p>[image ', $object->Content);
+        $this->assertFalse($image->isPublished(), 'Left in draft while the record is a draft');
+        $this->assertSame([$image->ID], $object->FileTracking()->column('ID'));
+
+        $object->publishRecursive();
+        $this->assertTrue(Image::get()->byID($image->ID)->isPublished(), 'Published through $owns');
+    }
+
+    public function testWriteToLiveStagePublishesTheFile(): void
+    {
+        Versioned::withVersionedMode(function () {
+            Versioned::set_stage(Versioned::LIVE);
+            VersionedObject::create(['Content' => $this->imgTag($this->pngBase64())])->write();
+        });
+
+        $this->assertTrue(Image::get()->first()->isPublished());
     }
 
     public function testOnlyFieldsThatProcessShortcodesAreConverted(): void

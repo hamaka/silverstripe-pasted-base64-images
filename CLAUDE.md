@@ -35,7 +35,14 @@ Tags: `1.0.0` on `1`, `2.0.0` on `2`. Bump the CHANGELOG with every release, and
   - It validates the image: strict `base64_decode`, then `getimagesizefromstring`, then the limits (`max_bytes`,
     `max_pixels`, `max_images`), then a walk through the PNG chunks or JPEG segments up to the end marker, so
     truncated data is caught and data after the image is allowed.
-  - It dedupes on `FileHash` (sha1) within the configured folder only, with an in-memory cache per instance.
+  - It scales an image above `max_dimension` down with the project's `Image_Backend` (via temp files, `loadFrom`
+    / `resizeRatio` / `writeTo`), not with GD itself. Intervention 3 (SS6) auto-orients on read; on Intervention 2
+    (SS5) it calls the magic `orientate()`. GIFs are not scaled. A failure saves the original and logs a warning.
+  - It dedupes on `FileHash` (sha1) of the saved (scaled) file within the configured folder only. The in-memory
+    cache is keyed on the hash of the pasted data, so the same image is not scaled again.
+  - It publishes only when `setPublish(true)` (the default). The extension and the task turn it off for the draft
+    and history of a versioned class with stages: `FileLinkTracking` has `owns: [FileTracking]`, so publishing the
+    owner publishes the file.
   - After creating a file it calls `AssetAdmin::generateThumbnails()` (when asset-admin is installed): the file
     list in the CMS only shows thumbnails that already exist, and those are normally made on upload.
     `generateMissingThumbnails()` does the same for files in the folder that don't have them; the task calls it.
@@ -47,7 +54,8 @@ Tags: `1.0.0` on `1`, `2.0.0` on `2`. Bump the CHANGELOG with every release, and
   - Data URIs it does not convert are counted as `skipped`, with a reason (`getSkipped()`); they are not errors.
 - `src/Extension/Base64ImageExtension.php`: `onBeforeWrite` on every `DataObject` (registered as `base64Images` in
   `_config/config.yml`, so projects can null it). It extends `SilverStripe\Core\Extension`, not `DataExtension`, which
-  works in 5.3+ and in 6. It checks `write_permission` (not on the command line) and calls
+  works in 5.3+ and in 6. It publishes at once only for owners without stages or a write to the live stage. It
+  checks `write_permission` (not on the command line) and calls
   `syncLinkTracking()` again after a conversion, because `FileLinkTracking` may have run before it.
 - `src/Task/Base64ImageTaskRunner.php`: the task's work, version independent, with output through a callback
   `fn(string $message, string $type)`. It uses direct `SQLUpdate`s, so no new versions are created and nothing ends up

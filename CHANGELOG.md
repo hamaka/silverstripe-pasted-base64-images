@@ -2,6 +2,15 @@
 
 ## 2.1.0 - unreleased
 
+- Images wider or taller than `max_dimension` (2500 px) are scaled down before they are saved, with the project's
+  `Image_Backend`. They were left as base64 when they had more pixels than `max_pixels`. GIFs are not scaled. Set
+  `max_dimension: 0` to keep the original size.
+- Files are no longer always published at once. On a versioned page or block they stay in draft and are published
+  along with it, through the `FileTracking` relation in `$owns`, like images inserted through the CMS. Objects that
+  are not versioned, and writes to the live stage, still publish them right away. The task publishes only the files
+  used in the live tables.
+- `Base64ImageConverter::setPublish()`; the stat `resized`.
+- README: what happens to an image that is not converted.
 - Errors are no longer mailed by the module. They are logged to the logger service
   `Psr\Log\LoggerInterface.Base64Images`, which falls back to the default `Psr\Log\LoggerInterface`. Define that
   service to mail them, or to send them anywhere else: see the README.

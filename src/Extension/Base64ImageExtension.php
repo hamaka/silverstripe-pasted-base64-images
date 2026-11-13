@@ -7,6 +7,7 @@ use SilverStripe\Control\Director;
 use SilverStripe\Core\Extension;
 use SilverStripe\ORM\DataObject;
 use SilverStripe\Security\Permission;
+use SilverStripe\Versioned\Versioned;
 
 /**
  * Converts base64 images in every HTML field that processes shortcodes (HTMLText) into an Image in Files and an
@@ -41,7 +42,7 @@ class Base64ImageExtension extends Extension
                 if (!$this->canConvertOnWrite()) {
                     return;
                 }
-                $converter = Base64ImageConverter::create();
+                $converter = Base64ImageConverter::create()->setPublish($this->publishesImmediately());
             }
 
             $newValue = $converter->convert($value, sprintf('%s #%d %s', get_class($owner), $owner->ID, $field));
@@ -60,8 +61,25 @@ class Base64ImageExtension extends Extension
     }
 
     /**
-     * The conversion creates and publishes files, so by default only CMS users trigger it. Writes from the command
-     * line (imports, tasks) are always converted.
+     * A versioned owner with stages publishes the files itself: FileLinkTracking puts FileTracking in its $owns, so
+     * publishing the page or block publishes the images in its HTML, like images inserted through the CMS. Other
+     * owners are live at once, and so is a write to the live stage, so their files are published right away.
+     */
+    protected function publishesImmediately(): bool
+    {
+        $owner = $this->getOwner();
+
+        if (!$owner->hasExtension(Versioned::class) || !$owner->hasStages()) {
+            return true;
+        }
+
+        // Versioned writes to the table of the current stage
+        return Versioned::get_stage() === Versioned::LIVE;
+    }
+
+    /**
+     * The conversion creates (and may publish) files, so by default only CMS users trigger it. Writes from the
+     * command line (imports, tasks) are always converted.
      */
     protected function canConvertOnWrite(): bool
     {

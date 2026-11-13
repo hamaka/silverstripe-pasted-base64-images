@@ -4,11 +4,13 @@ namespace Hamaka\Base64Images;
 
 use InvalidArgumentException;
 use Psr\Log\LoggerInterface;
+use RuntimeException;
 use SilverStripe\AssetAdmin\Controller\AssetAdmin;
 use SilverStripe\AssetAdmin\Forms\UploadField;
 use SilverStripe\Assets\File;
 use SilverStripe\Assets\Folder;
 use SilverStripe\Assets\Image;
+use SilverStripe\Assets\Image_Backend;
 use SilverStripe\Core\Config\Configurable;
 use SilverStripe\Core\Injector\Injectable;
 use SilverStripe\Core\Injector\Injector;
@@ -26,8 +28,10 @@ use Throwable;
  * into the editor ends up as a base64 data URI in the HTML field. Every save/publish then copies the full image into
  * the *_Versions table again, and the image is not managed in Files (no reuse, resizing or caching).
  *
+ * - An image wider or taller than max_dimension is scaled down with the project's Image_Backend.
  * - Deduplicated on FileHash (sha1) within the configured folder: pasting the same image again, or converting old
  *   versions, reuses one file.
+ * - Files are published right away, or left in draft for a versioned owner to publish: see setPublish().
  * - On any error (invalid or truncated data, an image over a limit, PCRE error, write failure) the original tag is
  *   left untouched, so no content is lost. The error is logged to Psr\Log\LoggerInterface.Base64Images, see
  *   logger().
@@ -70,7 +74,18 @@ class Base64ImageConverter
     /** Largest image that is converted, in bytes of the decoded file. 0: no limit */
     private static int $max_bytes = 20971520;
 
-    /** Largest image that is converted, in pixels (width x height). 0: no limit */
+    /**
+     * A wider or taller image is scaled down to this width or height before it is saved, with the project's
+     * Image_Backend (Intervention) and its quality. 0: keep the original size. GIFs are never scaled: an animated
+     * GIF would lose its animation.
+     */
+    private static int $max_dimension = 2500;
+
+    /**
+     * Safety limit: an image with more pixels (width x height) is not converted at all. Scaling down and generating
+     * thumbnails load the whole image into memory (about 4 bytes per pixel), so this keeps that within memory_limit.
+     * 0: no limit
+     */
     private static int $max_pixels = 30000000;
 
     /** At most this many images are converted per HTML value (one field of one record). 0: no limit */
@@ -122,6 +137,7 @@ class Base64ImageConverter
     protected array $stats = [
         'converted' => 0, // <img> tags converted (dry run: convertible)
         'created'   => 0, // new Image files
+        'resized'   => 0, // images scaled down to max_dimension, once per image (dry run: to scale down)
         'reused'    => 0, // existing file reused (same FileHash)
         'failed'    => 0, // tags left untouched because of an error
         'skipped'   => 0, // data URIs left untouched because this class does not convert them
@@ -132,8 +148,16 @@ class Base64ImageConverter
 
     protected array $skipped = [];
 
-    /** sha1 => Image, saves queries when the same image appears in many versions */
+    protected bool $publish = true;
+
+    /**
+     * sha1 of the pasted data => [file, width, height, resized]. Saves queries, and scaling the image down again,
+     * when the same image appears in many versions.
+     */
     protected array $imageCache = [];
+
+    /** sha1 => true for the images a dry run counted as to scale down */
+    protected array $scaledInDryRun = [];
 
     /** Images accepted in the HTML value that is being converted, for max_images */
     protected int $imagesInValue = 0;
@@ -144,6 +168,19 @@ class Base64ImageConverter
     public function setDryRun(bool $dryRun): static
     {
         $this->dryRun = $dryRun;
+
+        return $this;
+    }
+
+    /**
+     * Whether the files are published right away. False for content that is published later, through a versioned
+     * owner: its FileTracking relation is in $owns (FileLinkTracking), so publishing the owner publishes the files
+     * in its HTML. True for content that is live at once: an owner that is not versioned, or a write to the live
+     * stage.
+     */
+    public function setPublish(bool $publish): static
+    {
+        $this->publish = $publish;
 
         return $this;
     }
@@ -381,12 +418,30 @@ class Base64ImageConverter
         if ($this->dryRun) {
             $this->stats['converted']++;
             $this->stats['bytes'] += strlen($src);
+            // Once per image, as an apply run scales it once
+            if ($this->needsScaling($image) && !isset($this->scaledInDryRun[$image['hash']])) {
+                $this->scaledInDryRun[$image['hash']] = true;
+                $this->stats['resized']++;
+            }
 
             return $tag;
         }
 
         try {
-            $file = $this->findOrCreateImage($image);
+            $saved = $this->imageCache[$image['hash']] ?? null;
+            if ($saved) {
+                $this->stats['reused']++;
+                $this->publishIfNeeded($saved['file']);
+            } else {
+                $stored = $this->scaleDown($image, $context);
+                $saved = [
+                    'file'    => $this->findOrCreateImage($stored),
+                    'width'   => $stored['width'],
+                    'height'  => $stored['height'],
+                    'resized' => $stored !== $image,
+                ];
+                $this->imageCache[$image['hash']] = $saved;
+            }
         } catch (Throwable $e) {
             $this->addError($context, 'Saving as Image failed: ' . $e->getMessage(), $tag);
 
@@ -396,7 +451,111 @@ class Base64ImageConverter
         $this->stats['converted']++;
         $this->stats['bytes'] += strlen($src);
 
-        return $this->buildShortcode($file, $attributes, $image['width'], $image['height']);
+        return $this->buildShortcode($saved['file'], $attributes, $saved['width'], $saved['height'], $saved['resized']);
+    }
+
+    /**
+     * Whether scaleDown() scales the image: wider or taller than max_dimension, and not a GIF
+     */
+    protected function needsScaling(array $image): bool
+    {
+        $maxDimension = (int) $this->setting('max_dimension');
+
+        return $maxDimension > 0
+            && $image['type'] !== IMAGETYPE_GIF
+            && max($image['width'], $image['height']) > $maxDimension;
+    }
+
+    /**
+     * Scales an image down to max_dimension with the project's Image_Backend, the same one that makes the resized
+     * variants of every other image. A JPEG is turned upright according to its EXIF orientation, as the backend
+     * does for every variant. When scaling fails the original is saved, which is logged but is not an error.
+     *
+     * @return array the image to save, in the format of decodeAndValidate(); $image itself when unchanged
+     */
+    protected function scaleDown(array $image, string $context): array
+    {
+        if (!$this->needsScaling($image)) {
+            return $image;
+        }
+
+        $maxDimension = (int) $this->setting('max_dimension');
+        $base = tempnam(TEMP_PATH, 'b64');
+        $source = $base . '.' . $image['ext'];
+        $target = $base . '-scaled.' . $image['ext'];
+
+        try {
+            file_put_contents($source, $image['data']);
+
+            /** @var Image_Backend $backend */
+            $backend = Injector::inst()->create(Image_Backend::class);
+            $backend->loadFrom($source);
+            $resource = $backend->getImageResource();
+            if (!$resource) {
+                throw new RuntimeException('the image backend could not read it');
+            }
+
+            // Intervention 3 (Silverstripe 6, has orient()) does this on reading. Intervention 2 only when the backend
+            // loads from the asset store, not from a path, so do it here; orientate() is a magic method there.
+            if (!method_exists($resource, 'orient')) {
+                try {
+                    $backend->setImageResource($resource->orientate());
+                } catch (Throwable $e) {
+                    // No exif extension: saved as it is, as the backend does for its own variants
+                }
+            }
+
+            $scaled = $backend->resizeRatio($maxDimension, $maxDimension);
+            if (!$scaled || !$scaled->writeTo($target)) {
+                throw new RuntimeException('the image backend could not scale it');
+            }
+
+            $data = (string) file_get_contents($target);
+            $size = @getimagesizefromstring($data);
+            if (!$size || ($size[2] ?? null) !== $image['type']) {
+                throw new RuntimeException('the scaled image is not valid');
+            }
+        } catch (Throwable $e) {
+            static::logger()->warning(sprintf(
+                'Pasted image saved at its original size (%s): %s',
+                $context ?: 'unknown',
+                $e->getMessage()
+            ));
+
+            return $image;
+        } finally {
+            foreach ([$base, $source, $target] as $path) {
+                if (is_file($path)) {
+                    @unlink($path);
+                }
+            }
+        }
+
+        $this->stats['resized']++;
+
+        return [
+            'data'   => $data,
+            'hash'   => sha1($data),
+            'type'   => $image['type'],
+            'ext'    => $image['ext'],
+            'width'  => (int) $size[0],
+            'height' => (int) $size[1],
+        ];
+    }
+
+    /**
+     * Publishes a file that is reused, when this conversion publishes and the file is not published yet
+     */
+    protected function publishIfNeeded(Image $file): void
+    {
+        if (!$this->publish || $file->isPublished()) {
+            return;
+        }
+
+        Versioned::withVersionedMode(function () use ($file) {
+            Versioned::set_stage(Versioned::DRAFT);
+            $file->publishSingle();
+        });
     }
 
     /**
@@ -614,16 +773,17 @@ class Base64ImageConverter
         return false;
     }
 
+    /**
+     * The file in the module's folder with this content, or a new one. Published when this conversion publishes
+     * (see setPublish()), otherwise left in draft for the owner to publish.
+     *
+     * @param array $image the image to save, as returned by scaleDown()
+     */
     protected function findOrCreateImage(array $image): Image
     {
         $hash = $image['hash'];
-        if (isset($this->imageCache[$hash])) {
-            $this->stats['reused']++;
 
-            return $this->imageCache[$hash];
-        }
-
-        $file = Versioned::withVersionedMode(function () use ($image, $hash) {
+        return Versioned::withVersionedMode(function () use ($image, $hash) {
             // Always look up and write in draft, also when called from the frontend (live)
             Versioned::set_stage(Versioned::DRAFT);
 
@@ -637,9 +797,7 @@ class Base64ImageConverter
                 ->sort('ID', 'ASC')
                 ->first();
             if ($existing && $existing->exists()) {
-                if (!$existing->isPublished()) {
-                    $existing->publishSingle();
-                }
+                $this->publishIfNeeded($existing);
                 $this->stats['reused']++;
 
                 return $existing;
@@ -660,16 +818,14 @@ class Base64ImageConverter
             }
 
             $file->write();
-            $file->publishSingle();
+            if ($this->publish) {
+                $file->publishSingle();
+            }
             $this->generateThumbnails($file);
             $this->stats['created']++;
 
             return $file;
         });
-
-        $this->imageCache[$hash] = $file;
-
-        return $file;
     }
 
     /**
@@ -748,8 +904,12 @@ class Base64ImageConverter
 
     /**
      * Same format as the CMS editor: [image src="..." id="..." width="..." height="..." class="..." alt="..."]
+     *
+     * @param int $naturalWidth width of the saved file
+     * @param int $naturalHeight height of the saved file
+     * @param bool $scaled whether the saved file was scaled down from the pasted image
      */
-    protected function buildShortcode(Image $file, array $attributes, int $naturalWidth, int $naturalHeight): string
+    protected function buildShortcode(Image $file, array $attributes, int $naturalWidth, int $naturalHeight, bool $scaled = false): string
     {
         $width = $this->toPixels($attributes['width'] ?? null);
         $height = $this->toPixels($attributes['height'] ?? null);
@@ -762,6 +922,13 @@ class Base64ImageConverter
         } elseif (!$width && !$height) {
             $width = $naturalWidth;
             $height = $naturalHeight;
+        }
+
+        // A size from the pasted tag that is larger than the scaled down file would make the shortcode upscale it
+        if ($scaled && ($width > $naturalWidth || $height > $naturalHeight)) {
+            $factor = min($naturalWidth / $width, $naturalHeight / $height);
+            $width = max(1, (int) round($width * $factor));
+            $height = max(1, (int) round($height * $factor));
         }
 
         $class = trim($attributes['class'] ?? '');
