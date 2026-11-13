@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.1.0 - unreleased
+## 1.1.0 - 2026-11-13
 
 - Images wider or taller than `max_dimension` (2500 px) are scaled down before they are saved, with the project's
   `Image_Backend`. They were left as base64 when they had more pixels than `max_pixels`. GIFs are not scaled. Set
